@@ -1,6 +1,6 @@
 const API_URL = 'http://localhost:8080';
 
-const getAuthHeader = () => {
+const getAuthHeader = (): Record<string, string> => {
   const token = localStorage.getItem('token');
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
@@ -64,6 +64,23 @@ export const shopApi = {
   },
 };
 
+export const uploadApi = {
+  uploadImage: async (file: File): Promise<{ url: string }> => {
+    const formData = new FormData();
+    formData.append('image', file);
+    const res = await fetch(`${API_URL}/api/upload/image`, {
+      method: 'POST',
+      headers: getAuthHeader(),
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to upload image');
+    }
+    return res.json();
+  },
+};
+
 export const productApi = {
   getProducts: async (category?: string, search?: string) => {
     const params = new URLSearchParams();
@@ -88,7 +105,7 @@ export const productApi = {
     name: string;
     description: string;
     category: string;
-    purchase_price: number;
+    purchase_price?: number;
     selling_price: number;
     stock: number;
     image_url?: string;
@@ -105,15 +122,18 @@ export const productApi = {
     return res.json();
   },
 
-  updateProduct: async (id: string, data: Partial<{
-    name: string;
-    description: string;
-    category: string;
-    purchase_price: number;
-    selling_price: number;
-    stock: number;
-    image_url: string;
-  }>) => {
+  updateProduct: async (
+    id: string,
+    data: Partial<{
+      name: string;
+      description: string;
+      category: string;
+      purchase_price: number;
+      selling_price: number;
+      stock: number;
+      image_url: string;
+    }>
+  ) => {
     const res = await fetch(`${API_URL}/api/products/${id}`, {
       method: 'PUT',
       headers: {
@@ -137,9 +157,12 @@ export const productApi = {
 };
 
 export const transactionApi = {
-  getTransactions: async (type?: string) => {
-    const params = type ? `?type=${type}` : '';
-    const res = await fetch(`${API_URL}/api/transactions${params}`, {
+  getTransactions: async (type?: string, dateFrom?: string, dateTo?: string) => {
+    const params = new URLSearchParams();
+    if (type) params.append('type', type);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    const res = await fetch(`${API_URL}/api/transactions?${params}`, {
       headers: getAuthHeader(),
     });
     if (!res.ok) throw new Error('Failed to fetch transactions');
@@ -151,6 +174,7 @@ export const transactionApi = {
     product_id?: string;
     quantity?: number;
     amount: number;
+    comment?: string;
   }) => {
     const res = await fetch(`${API_URL}/api/transactions`, {
       method: 'POST',

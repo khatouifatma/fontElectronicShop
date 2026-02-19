@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { productApi } from '../services/api';
+import { useEffect, useRef, useState } from 'react';
+import { productApi, uploadApi } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import Layout from '../components/Layout';
 import {
@@ -10,6 +10,8 @@ import {
   Trash2,
   X,
   AlertCircle,
+  Upload,
+  Image as ImageIcon,
 } from 'lucide-react';
 
 interface Product {
@@ -23,6 +25,22 @@ interface Product {
   image_url: string;
 }
 
+const DEFAULT_CATEGORIES = [
+  'Smartphones',
+  'Laptops',
+  'Tablets',
+  'Accessories',
+  'Audio',
+  'TV & Displays',
+  'Gaming',
+  'Cameras',
+  'Printers',
+  'Networking',
+  'Storage',
+  'Composants',
+  'Autre',
+];
+
 export default function Products() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,6 +48,10 @@ export default function Products() {
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [error, setError] = useState('');
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { isSuperAdmin } = useAuth();
 
   const [formData, setFormData] = useState({
@@ -49,7 +71,14 @@ export default function Products() {
   const loadProducts = async () => {
     try {
       const result = await productApi.getProducts(undefined, search);
-      setProducts(result.products || []);
+      const prods: Product[] = result.products || [];
+      setProducts(prods);
+
+      const existingCats = Array.from(
+        new Set(prods.map((p) => p.category).filter(Boolean))
+      ) as string[];
+      const merged = Array.from(new Set([...DEFAULT_CATEGORIES, ...existingCats])).sort();
+      setCategories(merged);
     } catch (error) {
       console.error('Failed to load products:', error);
     } finally {
@@ -69,6 +98,7 @@ export default function Products() {
         stock: product.stock.toString(),
         image_url: product.image_url || '',
       });
+      setImagePreview(product.image_url || '');
     } else {
       setEditingProduct(null);
       setFormData({
@@ -80,6 +110,7 @@ export default function Products() {
         stock: '',
         image_url: '',
       });
+      setImagePreview('');
     }
     setError('');
     setShowModal(true);
@@ -89,27 +120,64 @@ export default function Products() {
     setShowModal(false);
     setEditingProduct(null);
     setError('');
+    setImagePreview('');
+  };
+
+  const handleImageFile = async (file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setImagePreview(previewUrl);
+    setUploadingImage(true);
+    try {
+      const { url } = await uploadApi.uploadImage(file);
+      const fullUrl = `http://localhost:8080${url}`;
+      setFormData((prev) => ({ ...prev, image_url: fullUrl }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Image upload failed');
+      setImagePreview(formData.image_url);
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+      handleImageFile(file);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
+    if (uploadingImage) {
+      setError('Please wait for image upload to finish');
+      return;
+    }
+
+    if (isSuperAdmin && !formData.purchase_price) {
+      setError('Purchase price is required');
+      return;
+    }
+
     try {
-      const data = {
+      const baseData = {
         name: formData.name,
         description: formData.description,
         category: formData.category,
-        purchase_price: parseFloat(formData.purchase_price),
         selling_price: parseFloat(formData.selling_price),
         stock: parseInt(formData.stock),
         image_url: formData.image_url,
+        ...(formData.purchase_price
+          ? { purchase_price: parseFloat(formData.purchase_price) }
+          : {}),
       };
 
       if (editingProduct) {
-        await productApi.updateProduct(editingProduct.id, data);
+        await productApi.updateProduct(editingProduct.id, baseData);
       } else {
-        await productApi.createProduct(data);
+        await productApi.createProduct(baseData);
       }
 
       handleCloseModal();
@@ -121,11 +189,10 @@ export default function Products() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this product?')) return;
-
     try {
       await productApi.deleteProduct(id);
       loadProducts();
-    } catch (error) {
+    } catch {
       alert('Failed to delete product');
     }
   };
@@ -170,24 +237,25 @@ export default function Products() {
           </div>
         </div>
 
+        {/* Product cards grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {products.map((product) => (
             <div
               key={product.id}
               className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition"
             >
-              {product.image_url && (
-                <img
-                  src={product.image_url}
-                  alt={product.name}
-                  className="w-full h-48 object-cover"
-                />
-              )}
-              {!product.image_url && (
-                <div className="w-full h-48 bg-gray-100 flex items-center justify-center">
+              {/* Card image — hauteur fixe, ne dépasse jamais */}
+              <div className="w-full h-40 bg-gray-100 flex items-center justify-center overflow-hidden">
+                {product.image_url ? (
+                  <img
+                    src={product.image_url}
+                    alt={product.name}
+                    className="max-h-40 max-w-full object-contain"
+                  />
+                ) : (
                   <Package className="w-16 h-16 text-gray-400" />
-                </div>
-              )}
+                )}
+              </div>
 
               <div className="p-4 space-y-3">
                 <div>
@@ -200,9 +268,7 @@ export default function Products() {
                 </div>
 
                 {product.description && (
-                  <p className="text-sm text-gray-600 line-clamp-2">
-                    {product.description}
-                  </p>
+                  <p className="text-sm text-gray-600 line-clamp-2">{product.description}</p>
                 )}
 
                 <div className="space-y-2">
@@ -261,9 +327,7 @@ export default function Products() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
             <Package className="w-16 h-16 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">No products found</h3>
-            <p className="text-gray-600 mb-6">
-              Get started by adding your first product
-            </p>
+            <p className="text-gray-600 mb-6">Get started by adding your first product</p>
             <button
               onClick={() => handleOpenModal()}
               className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition"
@@ -298,6 +362,74 @@ export default function Products() {
                 </div>
               )}
 
+              {/* Image Upload */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Product Image
+                </label>
+
+                {/* Zone drop — h-40 fixe, overflow hidden, image contrainte */}
+                <div
+                  onDrop={handleFileDrop}
+                  onDragOver={(e) => e.preventDefault()}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="relative border-2 border-dashed border-gray-300 rounded-xl overflow-hidden cursor-pointer hover:border-blue-400 transition group h-40 bg-gray-50 flex items-center justify-center"
+                >
+                  {imagePreview ? (
+                    <>
+                      <img
+                        src={imagePreview}
+                        alt="Preview"
+                        className="max-h-36 max-w-full object-contain"
+                      />
+                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition flex items-center justify-center">
+                        <span className="text-white font-medium opacity-0 group-hover:opacity-100 transition flex items-center gap-2">
+                          <Upload className="w-5 h-5" /> Change image
+                        </span>
+                      </div>
+                      {uploadingImage && (
+                        <div className="absolute inset-0 bg-white bg-opacity-70 flex items-center justify-center">
+                          <div className="animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent"></div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center text-gray-400 group-hover:text-blue-500 transition">
+                      {uploadingImage ? (
+                        <div className="animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent mb-3"></div>
+                      ) : (
+                        <ImageIcon className="w-12 h-12 mb-3" />
+                      )}
+                      <p className="text-sm font-medium">
+                        {uploadingImage ? 'Uploading...' : 'Click or drag & drop an image'}
+                      </p>
+                      <p className="text-xs mt-1">JPG, PNG, WEBP up to 5MB</p>
+                    </div>
+                  )}
+                </div>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleImageFile(file);
+                  }}
+                />
+                <input
+                  type="url"
+                  value={formData.image_url}
+                  onChange={(e) => {
+                    setFormData({ ...formData, image_url: e.target.value });
+                    setImagePreview(e.target.value);
+                  }}
+                  className="mt-2 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  placeholder="Or paste an image URL..."
+                />
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Product Name *
@@ -317,9 +449,7 @@ export default function Products() {
                 </label>
                 <textarea
                   value={formData.description}
-                  onChange={(e) =>
-                    setFormData({ ...formData, description: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   rows={3}
                 />
@@ -330,14 +460,38 @@ export default function Products() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Category
                   </label>
-                  <input
-                    type="text"
+                  <select
                     value={formData.category}
-                    onChange={(e) =>
-                      setFormData({ ...formData, category: e.target.value })
-                    }
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
+                  >
+                    <option value="">-- Select category --</option>
+                    {categories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                    <option value="__custom">+ Add custom...</option>
+                  </select>
+                  {formData.category === '__custom' && (
+                    <input
+                      type="text"
+                      placeholder="Type new category..."
+                      className="mt-2 w-full px-4 py-2 border border-blue-400 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      onBlur={(e) => {
+                        if (e.target.value) {
+                          const newCat = e.target.value.trim();
+                          setFormData({ ...formData, category: newCat });
+                          if (!categories.includes(newCat)) {
+                            setCategories([...categories, newCat].sort());
+                          }
+                        } else {
+                          setFormData({ ...formData, category: '' });
+                        }
+                      }}
+                      autoFocus
+                    />
+                  )}
                 </div>
 
                 <div>
@@ -358,7 +512,10 @@ export default function Products() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Purchase Price *
+                    Purchase Price {isSuperAdmin ? '*' : ''}
+                    {!isSuperAdmin && (
+                      <span className="text-gray-400 text-xs ml-1">(optional)</span>
+                    )}
                   </label>
                   <input
                     type="number"
@@ -369,7 +526,7 @@ export default function Products() {
                     }
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     min="0"
-                    required
+                    required={isSuperAdmin}
                   />
                 </div>
 
@@ -391,21 +548,6 @@ export default function Products() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Image URL
-                </label>
-                <input
-                  type="url"
-                  value={formData.image_url}
-                  onChange={(e) =>
-                    setFormData({ ...formData, image_url: e.target.value })
-                  }
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="https://example.com/image.jpg"
-                />
-              </div>
-
               <div className="flex gap-3 pt-4">
                 <button
                   type="button"
@@ -416,9 +558,10 @@ export default function Products() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                  disabled={uploadingImage}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {editingProduct ? 'Update Product' : 'Add Product'}
+                  {uploadingImage ? 'Uploading...' : editingProduct ? 'Update Product' : 'Add Product'}
                 </button>
               </div>
             </form>
